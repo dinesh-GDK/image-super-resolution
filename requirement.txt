@@ -5,3 +5,5 @@ torchvision
 torch
 tensorboard
 torchmetrics
+scikit-image
+h5py

@@ -1,116 +1,81 @@
-import os
-import sys
-from pathlib import Path
-import shutil
 from glob import glob
 import random
 
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 import numpy as np
-import nibabel as nib
+import h5py
+import cv2
+from tqdm import tqdm
 
-def clear_directory(directory):
-	try:
-		shutil.rmtree(directory)
-	except FileNotFoundError:
-		pass
-	os.makedirs(directory)
+from utils.conversion import convert_rgb_to_y
 
-def normalize(frame, min, max):
-	return (frame - min) / (max - min)
+def create_patches(file_paths, output_file, len, PATCH_SIZE=64):
 
-def convert_to_HU(data, rescale_slope, rescale_intercept):
-    return data * rescale_slope - rescale_intercept
+    STRIDE = PATCH_SIZE
+
+    lr_patches, hr_patches = list(), list()
+
+    print(f"Building {output_file}...")
+
+    for lr_path, hr_path in tqdm(file_paths, total=len):
+
+        lr = cv2.cvtColor(cv2.imread(lr_path), cv2.COLOR_BGR2RGB)
+        hr = cv2.cvtColor(cv2.imread(hr_path), cv2.COLOR_BGR2RGB)
+
+        height, width, _ = hr.shape
+        lr = cv2.resize(lr, (width, height), interpolation=cv2.INTER_CUBIC)
+
+        lr = convert_rgb_to_y(lr)
+        hr = convert_rgb_to_y(hr)
+
+        for i in range(0, lr.shape[0] - PATCH_SIZE + 1, STRIDE):
+            for j in range(0, lr.shape[1] - PATCH_SIZE + 1, STRIDE):
+                lr_patches.append(lr[i:i + PATCH_SIZE, j:j + PATCH_SIZE])
+                hr_patches.append(hr[i:i + PATCH_SIZE, j:j + PATCH_SIZE])
+
+    lr_patches, hr_patches = np.array(lr_patches), np.array(hr_patches)
+
+    with h5py.File(output_file, "w") as hf:
+        hf.create_dataset("lr", lr_patches)
+        hf.create_dataset("hr", hr_patches)
 
 if __name__ == "__main__":
-    
-    TRUNC_RANGE = (0, 500)
-    # RESCALE_SLOPE = 1
-    # RESCALE_INTERCEPT = -1024
+    train_hr = sorted(glob("dataset_main/DIV2K_train_HR/**/*.png", recursive=True))
+    train_lr = sorted(glob("dataset_main/DIV2K_train_LR*/**/*.png", recursive=True))
 
-    input_path = "/StudentWorkArea/ManufacturerNII/*/*/*.nii.gz"
-    output_dir = "../dataset"
-    output_path = os.path.join(output_dir, "all")
-    train_path = os.path.join(output_dir, "train")
-    val_path = os.path.join(output_dir, "val")
-    test_path = os.path.join(output_dir, "test")
-    nFiles = 100
+    test_hr = sorted(glob("dataset_main/DIV2K_valid_HR/**/*.png", recursive=True))
+    test_lr = sorted(glob("dataset_main/DIV2K_valid_LR*/**/*.png", recursive=True))
 
-    if sys.argv[1] == "generate":
+    pairs = list(zip(train_lr, train_hr))
+    random.shuffle(pairs)
 
-        print("Generating files...")
-        # clear_directory(output_path)
+    train_pairs = pairs[:600]
+    valid_pairs = pairs[600:]
 
-        all_files = glob(input_path)
-        file_count, idx = 0, 0
-        pbar = tqdm(total=nFiles)
+    create_patches(train_pairs, 600, "train.hdf5")
+    create_patches(valid_pairs, 200, "valid.hdf5")
+    create_patches(zip(test_lr, test_hr), "test.hdf5", 100)
 
-        while file_count < nFiles:
 
-            raw_file = all_files[idx]
-            hura_file = raw_file.replace("ManufacturerNII", "ManufacturerNIIHuraProcessed")
+# for input, label in train_pairs:
+#     input_des = input.replace("dataset_main", "dataset")
+#     label_des = label.replace("dataset_main", "dataset")
+#     os.makedirs(os.path.dirname(input_des), exist_ok=True)
+#     os.makedirs(os.path.dirname(label_des), exist_ok=True)
+#     shutil.copy(input, input_des)
+#     shutil.copy(label, label_des)
 
-            idx += 1
-            if not os.path.exists(hura_file):
-                continue
+# for input, label in valid_pairs:
+#     input_des = input.replace("dataset_main", "dataset").replace("train", "valid")
+#     label_des = label.replace("dataset_main", "dataset").replace("train", "valid")
+#     os.makedirs(os.path.dirname(input_des), exist_ok=True)
+#     os.makedirs(os.path.dirname(label_des), exist_ok=True)
+#     shutil.copy(input, input_des)
+#     shutil.copy(label, label_des)
 
-            parts = Path(raw_file).parts
-            file_name = parts[-3] + "_" + parts[-2]
-            raw_data = nib.load(raw_file).get_fdata()
-            hura_data = nib.load(hura_file).get_fdata()
-
-            if raw_data.shape != hura_data.shape:
-                continue
-            
-            raw_data = np.where(((raw_data < TRUNC_RANGE[0]) | (raw_data > TRUNC_RANGE[1])), 0, raw_data)
-            hura_data = np.where(((hura_data < TRUNC_RANGE[0]) | (hura_data > TRUNC_RANGE[1])), 0, hura_data)
-
-            # raw_data = convert_to_HU(raw_data, RESCALE_SLOPE, RESCALE_INTERCEPT)
-            # hura_data = convert_to_HU(hura_data, RESCALE_SLOPE, RESCALE_INTERCEPT)
-            
-            raw_data = normalize(raw_data, TRUNC_RANGE[0], TRUNC_RANGE[1])
-            hura_data = normalize(hura_data, TRUNC_RANGE[0], TRUNC_RANGE[1])
-            
-            for t in range(raw_data.shape[-1]):
-                for s in range(raw_data.shape[-2]):
-                    file_path = os.path.join(output_path, f"{file_name}_s{s:02d}_t{t:02d}.npz")	
-                    np.savez(file_path, input=raw_data[:, :, s, t], output=hura_data[:, :, s, t])
-
-            pbar.update(1)
-            file_count += 1
-
-        pbar.close()
-    
-    elif sys.argv[1] == "split":
-
-        print("Splitting files...")
-        
-        clear_directory(train_path)
-        clear_directory(val_path)
-        clear_directory(test_path)
-
-        all_files_path = glob(os.path.join(output_path, "*"))
-        print(f"Dataset length: {len(all_files_path)}")
-        random.shuffle(all_files_path)
-
-        test_split = 0.1
-        val_split = 0.1
-
-        test = all_files_path[:int(test_split*len(all_files_path))]
-        all_files_path = all_files_path[int(test_split*len(all_files_path)):]
-        val = all_files_path[:int(val_split*len(all_files_path))]
-        all_files_path = all_files_path[int(val_split*len(all_files_path)):]
-
-        def split_files(files_path, category):
-            for file in files_path:
-                new_path = file.replace("all", category)
-                shutil.copyfile(file, new_path)
-            print(f"{category} split completed")
-
-        split_files(test, "test")
-        split_files(val, "val")
-        split_files(all_files_path, "train")
-
-    else:
-        raise Exception("Invalid Input")
+# for input, label in zip(test_input, test_label):
+#     input_des = input.replace("dataset_main", "dataset").replace("valid", "test")
+#     label_des = label.replace("dataset_main", "dataset").replace("valid", "test")
+#     os.makedirs(os.path.dirname(input_des), exist_ok=True)
+#     os.makedirs(os.path.dirname(label_des), exist_ok=True)
+#     shutil.copy(input, input_des)
+#     shutil.copy(label, label_des)

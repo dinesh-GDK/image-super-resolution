@@ -9,14 +9,17 @@ import random
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
+from skimage.metrics import mean_squared_error as MSE
+from skimage.metrics import peak_signal_noise_ratio as PSNR
+from skimage.metrics import structural_similarity as SSIM
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure, MeanSquaredError
+# from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure, MeanSquaredError
 
-from dataset import DIV2K_dataset
+from dataset import DIV2K_dataset, convert_ycbcr_to_rgb
 from utils.logger import get_logger
-from models import UNet
+from models import UNet, SRCNN
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-c", "--config", type=str, required=False, help="config file with parameters")
@@ -26,16 +29,16 @@ class Orchestrator():
     mode = os.environ["MODE"]
     result_path = None
     use_gpu = True
-    num_workers = 4
+    num_workers = 8
     update_rate = 10 # progress bar update per 10 iterations
     save_rate = 10
     # model_path = None
     model_path = "/home/dinesh/EE541_Project/Results/sample/models/best_train_model.pt"
     
-    do_validation = True
-    epoch = 10
-    batch_size = 16
-    lr = 1e-3
+    do_validation = False
+    epoch = 500
+    batch_size = 4
+    lr = 1e-4
     weight_decay = 0
 
     train_input_path = "./sample_dataset/DIV2K_train_LR_bicubic_X2"
@@ -45,7 +48,7 @@ class Orchestrator():
     val_output_path = "./sample_dataset/DIV2K_train_HR"
 
     test_input_path = "./sample_dataset/DIV2K_train_LR_bicubic_X2"
-    test_output_path = "./sample_dataset/DIV2K_train_HR"
+    test_output_path = "./sample_dataset/DIV2K_train_LR_bicubic_X2"
     
     DEBUG = True
 
@@ -72,7 +75,7 @@ class Orchestrator():
         self.logger = get_logger(os.path.join(self.result_path, "log"))
 
         self.model = UNet()
-        self.criterion = torch.nn.CrossEntropyLoss()
+        self.criterion = torch.nn.MSELoss()
 
         if self.mode == "train":
 
@@ -89,7 +92,7 @@ class Orchestrator():
 
         elif self.mode == "test":
 
-            test_data  = DIV2K_dataset(self.test_input_path, self.test_output_path)
+            test_data  = DIV2K_dataset(self.test_input_path, self.test_output_path, is_test=True)
             self.test_dataloader   = DataLoader(test_data, self.batch_size,
                                         shuffle=True, num_workers=self.num_workers)
             self.model = UNet().to(self.device)
@@ -119,12 +122,9 @@ class Orchestrator():
             for i, (data, label) in enumerate(self.train_dataloader):
 
                 self.optimizer.zero_grad()
-                
                 input, target = data.to(self.device), label.to(self.device)
-
                 predict = self.model(input)
                 loss = self.criterion(predict, target)
-                
                 loss.backward()
                 self.optimizer.step()
 
@@ -132,11 +132,11 @@ class Orchestrator():
                 
                 if i % self.update_rate == 0:
                     pbar.update(min(self.update_rate, len(self.train_dataloader) - i))
-                    pbar.set_postfix(Loss=f"{loss.item():.4f}")
+                    pbar.set_postfix(Loss=f"{loss.item():.8f}")
             
             epoch_loss /= len(self.train_dataloader)
             self.writer.add_scalar('Loss/epochs', epoch_loss, epoch)
-            pbar.set_postfix(Loss=f"{epoch_loss:.4f}")
+            pbar.set_postfix(Loss=f"{epoch_loss:.8f}")
             pbar.close()
 
             if (epoch+1) % self.save_rate == 0:
@@ -177,11 +177,11 @@ class Orchestrator():
             
             if i % self.update_rate == 0:
                 pbar.update(min(self.update_rate, len(self.val_dataloader) - i))
-                pbar.set_postfix(Loss=f"{loss.item():.4f}")
+                pbar.set_postfix(Loss=f"{loss.item():.8f}")
         
         val_loss /= len(self.val_dataloader)
         self.writer.add_scalar('Loss/val', val_loss, epoch)
-        pbar.set_postfix(Loss=f"{val_loss:.4f}")
+        pbar.set_postfix(Loss=f"{val_loss:.8f}")
         pbar.close()
 
         return val_loss
@@ -201,55 +201,62 @@ class Orchestrator():
         
         f = open(os.path.join(self.result_path, "_metrics.csv"), "w+")
         csv_writer = csv.writer(f)
-        csv_writer.writerow(["S.No", "RMSE", "PSNR", "SSIM"])
+        csv_writer.writerow(["S.No", "Original RMSE", "Predict RMSE", \
+            "Original PSNR", "Predict PSNR", "Original SSIM", "Predict SSIM"])
 
         test_loss = 0
         for i, (data, label) in enumerate(self.test_dataloader):
 
             input, target = data.to(self.device), label.to(self.device)
-
-            
-            predict = self.model(input)
-            print(input.shape, predict.shape)
-
-            loss = self.criterion(predict, target)
-
+            predict = self.model(input[:, 0:1, :, :])
+            loss = self.criterion(predict, target[:, 0:1, :, :])
             test_loss += loss.item()
+
+            predict = torch.cat((predict, input[:, 1:2, :, :], input[:, 2:3, :, :]), 1)
 
             self.writer.add_scalar("Loss/test", loss.item(), i)
 
             if i in test_idx:
-                self.complete_test(i, input, predict, csv_writer)
+                self.complete_test(i, input, target, predict, csv_writer)
 
             if i % self.update_rate == 0:
                 pbar.update(min(self.update_rate, len(self.test_dataloader) - i))
-                pbar.set_postfix(Loss=f"{loss.item():.4f}")
+                pbar.set_postfix(Loss=f"{loss.item():.8f}")
         
         test_loss /= len(self.test_dataloader)
-        pbar.set_postfix(Loss=f"{test_loss:.4f}")
+        pbar.set_postfix(Loss=f"{test_loss:.8f}")
         pbar.close()
         f.close()
 
-    def complete_test(self, test_idx, input, predict, csv_writer):
+    def complete_test(self, test_idx, input, target, predict, csv_writer):
 
-        PSNR = PeakSignalNoiseRatio().to(self.device)
-        SSIM = StructuralSimilarityIndexMeasure().to(self.device)
-        MSE  = MeanSquaredError().to(self.device)
+        input = input.squeeze(0)*255
+        target = target.squeeze(0)*255
+        predict = predict.squeeze(0)*255
 
-        psnr = np.round(PSNR(input, predict).item(), 4)
-        ssim = np.round(SSIM(input, predict).item(), 4)
-        rmse = np.round(torch.sqrt(MSE(input, predict)).item(), 4)
+        input = convert_ycbcr_to_rgb(input)
+        predict = convert_ycbcr_to_rgb(predict)
+        target = convert_ycbcr_to_rgb(target)
+        
+        input = input.clip(0, 255).cpu().detach().numpy().astype(np.uint8)
+        target = target.clip(0, 255).cpu().detach().numpy().astype(np.uint8)
+        predict = predict.clip(0, 255).cpu().detach().numpy().astype(np.uint8)
 
-        csv_writer.writerow([test_idx, psnr, ssim, rmse])
+        p_psnr = np.round(PSNR(target, predict), 4)
+        p_ssim = np.round(SSIM(target, predict, channel_axis=-1), 4)
+        p_rmse = np.round(np.sqrt(MSE(target, predict)), 4)
+
+        o_psnr = np.round(PSNR(target, input), 4)
+        o_ssim = np.round(SSIM(target, input, channel_axis=-1), 4)
+        o_rmse = np.round(np.sqrt(MSE(target, input)), 4)
+
+        csv_writer.writerow([test_idx, o_rmse, p_rmse, o_psnr, p_psnr, o_ssim, p_ssim])
 
         images_path = os.path.join(self.result_path, "images")
         os.makedirs(images_path, exist_ok=True)
 
-        input = input.squeeze().permute(1, 2, 0).cpu().detach().numpy()
-        predict = predict.squeeze().permute(1, 2, 0).cpu().detach().numpy()
-
         fig, ax = plt.subplots(1, 2, figsize=(10, 3))
-        ax[0].imshow(input)
+        ax[0].imshow(target)
         ax[1].imshow(predict)
         ax[0].set_axis_off()
         ax[1].set_axis_off()
