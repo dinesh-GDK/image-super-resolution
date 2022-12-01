@@ -8,6 +8,7 @@ import random
 
 from tqdm import tqdm
 import numpy as np
+import cv2
 import matplotlib.pyplot as plt
 from skimage.metrics import mean_squared_error as MSE
 from skimage.metrics import peak_signal_noise_ratio as PSNR
@@ -17,8 +18,9 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 # from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure, MeanSquaredError
 
-from dataset import DIV2K_dataset, convert_ycbcr_to_rgb
+from dataset import DIV2K_dataset, test_DIV2K_dataset
 from utils.logger import get_logger
+from utils.conversion import convert_ycbcr_to_rgb
 from models import UNet, SRCNN
 
 parser = argparse.ArgumentParser()
@@ -30,27 +32,22 @@ class Orchestrator():
     result_path = None
     use_gpu = True
     num_workers = 8
-    update_rate = 10 # progress bar update per 10 iterations
+    update_rate = 10
     save_rate = 10
-    # model_path = None
-    model_path = "/home/dinesh/EE541_Project/Results/sample/models/best_train_model.pt"
     
-    do_validation = False
     epoch = 500
-    batch_size = 4
+    batch_size = 16
     lr = 1e-4
+    model_path = "/home/dinesh/EE541_Project/Results/2022-11-30-17-39-59/models/best_train_model.pt"
+
     weight_decay = 0
+    do_validation = True
 
-    train_input_path = "./sample_dataset/DIV2K_train_LR_bicubic_X2"
-    train_output_path = "./sample_dataset/DIV2K_train_HR"
+    train_dataset_path = "dataset/train"
+    valid_dataset_path = "dataset/valid"
+    test_dataset_path  = ("dataset_main/DIV2K_valid_HR", "dataset_main/DIV2K_valid_LR*")
 
-    val_input_path = "./sample_dataset/DIV2K_train_LR_bicubic_X2"
-    val_output_path = "./sample_dataset/DIV2K_train_HR"
-
-    test_input_path = "./sample_dataset/DIV2K_train_LR_bicubic_X2"
-    test_output_path = "./sample_dataset/DIV2K_train_LR_bicubic_X2"
-    
-    DEBUG = True
+    DEBUG = False
 
     def __init__(self, config_path=None):
         
@@ -79,8 +76,8 @@ class Orchestrator():
 
         if self.mode == "train":
 
-            train_data = DIV2K_dataset(self.train_input_path, self.train_output_path)
-            val_data   = DIV2K_dataset(self.val_input_path, self.val_output_path)
+            train_data = DIV2K_dataset(self.train_dataset_path)
+            val_data   = DIV2K_dataset(self.valid_dataset_path)
             self.train_dataloader = DataLoader(train_data, self.batch_size,
                                         shuffle=True, num_workers=self.num_workers)
             self.val_dataloader   = DataLoader(val_data, self.batch_size,
@@ -92,9 +89,9 @@ class Orchestrator():
 
         elif self.mode == "test":
 
-            test_data  = DIV2K_dataset(self.test_input_path, self.test_output_path, is_test=True)
-            self.test_dataloader   = DataLoader(test_data, self.batch_size,
-                                        shuffle=True, num_workers=self.num_workers)
+            test_data  = test_DIV2K_dataset(self.test_dataset_path)
+            self.test_dataloader = DataLoader(test_data, 1,
+                                    shuffle=True, num_workers=self.num_workers)
             self.model = UNet().to(self.device)
             self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
             self.test()
@@ -116,7 +113,7 @@ class Orchestrator():
 
             b="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]"
             pbar = tqdm(total=len(self.train_dataloader), bar_format=b,
-                        desc=f"Epochs: {epoch+1}/{self.epoch}", ascii=' =')
+                        desc=f"Epochs: {epoch+1}/{self.epoch}", ascii=" =")
             
             epoch_loss = 0
             for i, (data, label) in enumerate(self.train_dataloader):
@@ -135,7 +132,7 @@ class Orchestrator():
                     pbar.set_postfix(Loss=f"{loss.item():.8f}")
             
             epoch_loss /= len(self.train_dataloader)
-            self.writer.add_scalar('Loss/epochs', epoch_loss, epoch)
+            self.writer.add_scalar("Loss/epochs", epoch_loss, epoch)
             pbar.set_postfix(Loss=f"{epoch_loss:.8f}")
             pbar.close()
 
@@ -163,13 +160,12 @@ class Orchestrator():
 
         b="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]"
         pbar = tqdm(total=len(self.val_dataloader), bar_format=b,
-                    desc=f"Validation", ascii=' -')
+                    desc=f"Validation", ascii=" -")
         
         val_loss = 0
         for i, (data, label) in enumerate(self.val_dataloader):
 
             input, target = data.to(self.device), label.to(self.device)
-            
             predict = self.model(input)
             loss = self.criterion(predict, target)
 
@@ -180,7 +176,7 @@ class Orchestrator():
                 pbar.set_postfix(Loss=f"{loss.item():.8f}")
         
         val_loss /= len(self.val_dataloader)
-        self.writer.add_scalar('Loss/val', val_loss, epoch)
+        self.writer.add_scalar("Loss/val", val_loss, epoch)
         pbar.set_postfix(Loss=f"{val_loss:.8f}")
         pbar.close()
 
@@ -193,7 +189,7 @@ class Orchestrator():
         torch.cuda.empty_cache()
         self.model.eval()
 
-        test_idx = random.sample(range(0, len(self.test_dataloader)), min(1, 10))
+        test_idx = random.sample(range(0, len(self.test_dataloader)), 10)
 
         b="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]"
         pbar = tqdm(total=len(self.test_dataloader), bar_format=b,
@@ -205,7 +201,7 @@ class Orchestrator():
             "Original PSNR", "Predict PSNR", "Original SSIM", "Predict SSIM"])
 
         test_loss = 0
-        for i, (data, label) in enumerate(self.test_dataloader):
+        for i, (file_name, data, label) in enumerate(self.test_dataloader):
 
             input, target = data.to(self.device), label.to(self.device)
             predict = self.model(input[:, 0:1, :, :])
@@ -217,7 +213,7 @@ class Orchestrator():
             self.writer.add_scalar("Loss/test", loss.item(), i)
 
             if i in test_idx:
-                self.complete_test(i, input, target, predict, csv_writer)
+                self.complete_test(i, input, target, predict, file_name, csv_writer)
 
             if i % self.update_rate == 0:
                 pbar.update(min(self.update_rate, len(self.test_dataloader) - i))
@@ -228,7 +224,7 @@ class Orchestrator():
         pbar.close()
         f.close()
 
-    def complete_test(self, test_idx, input, target, predict, csv_writer):
+    def complete_test(self, test_idx, input, target, predict, file_name, csv_writer):
 
         input = input.squeeze(0)*255
         target = target.squeeze(0)*255
@@ -252,18 +248,25 @@ class Orchestrator():
 
         csv_writer.writerow([test_idx, o_rmse, p_rmse, o_psnr, p_psnr, o_ssim, p_ssim])
 
-        images_path = os.path.join(self.result_path, "images")
-        os.makedirs(images_path, exist_ok=True)
+        images_dir = os.path.join(self.result_path, "images")
+        os.makedirs(images_dir, exist_ok=True)
 
-        fig, ax = plt.subplots(1, 2, figsize=(10, 3))
-        ax[0].imshow(target)
-        ax[1].imshow(predict)
-        ax[0].set_axis_off()
-        ax[1].set_axis_off()
+        cv2.imwrite(os.path.join(images_dir, file_name[0]), cv2.cvtColor(predict, cv2.COLOR_RGB2BGR))
 
-        fig.suptitle(f"Random Image: {test_idx}")
-        fig.savefig(os.path.join(images_path, f"{test_idx}.png"), bbox_inches="tight")
-        plt.close()
+        # fig, ax = plt.subplots(1, 3, figsize=(10, 2))
+
+        # for i, (title, image) in enumerate(zip(["High Resolution", "Low Resolution", "Model Prediction"], [target, input, predict])):
+        #     ax[i].imshow(image)
+        #     ax[i].set_axis_off()
+        #     ax[i].set_title(title)
+
+        # print(f"RMSE:{o_rmse:.4f}\nPSNR:{o_psnr:.4f}\nSSIM:{o_ssim}:.4f")
+        # ax[1].set_xlabel(f"RMSE:{o_rmse:.4f}\nPSNR:{o_psnr:.4f}\nSSIM:{o_ssim:.4f}")
+        # ax[2].set_xlabel(f"RMSE:{p_rmse:.4f}\nPSNR:{p_psnr:.4f}\nSSIM:{p_ssim:.4f}")
+
+        # # fig.suptitle(f"Random Image: {test_idx}")
+        # fig.savefig(os.path.join(images_path, f"{test_idx}.png"))#, bbox_inches="tight")
+        # plt.close()
 
     def get_config(self, config_path):
 
