@@ -21,8 +21,13 @@ class DIV2K_dataset(torch.utils.data.Dataset):
 
         data = np.load(self.paths[index])
 
-        lr_image = torch.from_numpy(data["lr"])
-        hr_image = torch.from_numpy(data["hr"])
+        lr, hr = data["lr"], data["hr"]
+
+        height, width, _ = lr.shape
+        lr = cv2.resize(lr, (width//2, height//2))
+
+        lr_image = torch.from_numpy(lr)
+        hr_image = torch.from_numpy(hr)
          
         lr_image = convert_rgb_to_y(lr_image).unsqueeze(0)
         hr_image = convert_rgb_to_y(hr_image).unsqueeze(0)
@@ -49,13 +54,6 @@ class test_DIV2K_dataset(torch.utils.data.Dataset):
         file_name = Path(hr_path).parts[-1]
         lr_image  = cv2.cvtColor(cv2.imread(lr_path), cv2.COLOR_BGR2RGB)
         hr_image = cv2.cvtColor(cv2.imread(hr_path), cv2.COLOR_BGR2RGB)
-
-        height, width, _ = hr_image.shape
-        lr_image = cv2.resize(lr_image, (width, height), interpolation=cv2.INTER_CUBIC)
-
-        # height, width, _ = hr_image.shape
-        # lr_image = cv2.resize(lr_image, (width//4, height//4))
-        # hr_image = cv2.resize(hr_image, (width//4, height//4))
 
         lr_image = torch.from_numpy(lr_image)
         hr_image = torch.from_numpy(hr_image)

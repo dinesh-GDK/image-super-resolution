@@ -16,14 +16,11 @@ from skimage.metrics import structural_similarity as SSIM
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-# from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure, MeanSquaredError
 
 from dataset import DIV2K_dataset, test_DIV2K_dataset
 from utils.logger import get_logger
 from utils.conversion import convert_ycbcr_to_rgb
-from models import UNet, SRCNN
-
-
+from models import UNet, SRCNN, RRDBNet
 
 class Orchestrator():
     
@@ -44,7 +41,6 @@ class Orchestrator():
         valid_dataset_path = os.path.join(args.data_dir, 'valid')
         test_dataset_path = args.test_data
     
-
         if config_path is not None:
             self.get_config(config_path)
         
@@ -65,7 +61,7 @@ class Orchestrator():
         # log file
         self.logger = get_logger(os.path.join(self.result_path, "log"))
 
-        self.model = UNet().to(self.device)
+        self.model = RRDBNet(1, 1, 64, 23, gc=32).to(self.device)
         self.criterion = torch.nn.MSELoss()
 
         if self.mode == "train":
@@ -86,7 +82,6 @@ class Orchestrator():
             test_data  = test_DIV2K_dataset(test_dataset_path)
             self.test_dataloader = DataLoader(test_data, 1,
                                     shuffle=True, num_workers=self.num_workers)
-            self.model = UNet().to(self.device)
             self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
             self.test()
 
@@ -120,7 +115,7 @@ class Orchestrator():
                 self.optimizer.step()
 
                 epoch_loss += loss.item()
-                
+
                 if i % self.update_rate == 0:
                     pbar.update(min(self.update_rate, len(self.train_dataloader) - i))
                     pbar.set_postfix(Loss=f"{loss.item():.8f}")
@@ -224,6 +219,9 @@ class Orchestrator():
         target = target.squeeze(0)*255
         predict = predict.squeeze(0)*255
 
+        height, width, _ = target.shape
+        input = cv2.resize(input, (width, height), interpolation=cv2.INTER_CUBIC)
+
         input = convert_ycbcr_to_rgb(input)
         predict = convert_ycbcr_to_rgb(predict)
         target = convert_ycbcr_to_rgb(target)
@@ -297,7 +295,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--do_validation', type=bool, default=True)
-    parser.add_argument('--model_path', type=str, default='results/2022-12-03-17-15-53/models/best_val_model.pt', help='test only')
+    parser.add_argument('--model_path', type=str, default='results/2022-12-06-12-17-29/models/epoch0001.pt', help='test only')
     args = parser.parse_args()
 
     Orchestrator(args)
