@@ -17,7 +17,7 @@ bash dataset_setup.sh
 To train the model run the command
 
 ```bash
-MODE=train python3 main.py
+python main.py --train
 ```
 
 ## Test
@@ -25,11 +25,11 @@ MODE=train python3 main.py
 To test the model, change line **41** of `main.py` to
 
 ```
-model_path = "Results/<dir>/models/best_val_model.pt"
+model_path = "results/<dir>/models/best_val_model.pt"
 ```
 
 And then run the command
 
 ```bash
-MODE=test python3 main.py
+python main.py --test
 ```
