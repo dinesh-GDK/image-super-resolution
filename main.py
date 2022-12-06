@@ -23,43 +23,37 @@ from utils.logger import get_logger
 from utils.conversion import convert_ycbcr_to_rgb
 from models import UNet, SRCNN
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-c", "--config", type=str, required=False, help="config file with parameters")
+
 
 class Orchestrator():
-
-    mode = os.environ["MODE"]
-    result_path = None
-    use_gpu = True
-    num_workers = 8
-    update_rate = 10
-    save_rate = 10
     
-    epoch = 500
-    batch_size = 16
-    lr = 1e-4
-    model_path = "/home/dinesh/EE541_Project/Results/2022-11-30-17-39-59/models/best_train_model.pt"
+    def __init__(self, args, config_path=None):
+        self.mode = args.mode
+        self.num_workers = args.num_workers
+        self.update_rate = args.update_rate
+        self.save_rate = args.save_rate
+        self.epochs = args.epochs
+        self.batch_size = args.batch_size
+        self.lr = args.lr
+        self.model_path = args.model_path
+        self.weight_decay = args.weight_decay
+        self.do_validation = args.do_validation
+        self.DEBUG = args.DEBUG
 
-    weight_decay = 0
-    do_validation = True
+        train_dataset_path = os.path.join(args.data_dir, 'train')
+        valid_dataset_path = os.path.join(args.data_dir, 'valid')
+        test_dataset_path = args.test_data
+    
 
-    train_dataset_path = "dataset/train"
-    valid_dataset_path = "dataset/valid"
-    test_dataset_path  = ("dataset_main/DIV2K_valid_HR", "dataset_main/DIV2K_valid_LR*")
-
-    DEBUG = False
-
-    def __init__(self, config_path=None):
-        
         if config_path is not None:
             self.get_config(config_path)
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() and self.use_gpu else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         if self.DEBUG:
-            self.result_path = os.path.join("Results", "sample")
+            self.result_path = os.path.join(args.result_dir, "sample")
         else:
-            self.result_path = os.path.join("Results", datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+            self.result_path = os.path.join(args.result_dir, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
 
         self.models_path = os.path.join(self.result_path, "models")
 
@@ -71,13 +65,13 @@ class Orchestrator():
         # log file
         self.logger = get_logger(os.path.join(self.result_path, "log"))
 
-        self.model = UNet()
+        self.model = UNet().to(self.device)
         self.criterion = torch.nn.MSELoss()
 
         if self.mode == "train":
 
-            train_data = DIV2K_dataset(self.train_dataset_path)
-            val_data   = DIV2K_dataset(self.valid_dataset_path)
+            train_data = DIV2K_dataset(train_dataset_path)
+            val_data   = DIV2K_dataset(valid_dataset_path)
             self.train_dataloader = DataLoader(train_data, self.batch_size,
                                         shuffle=True, num_workers=self.num_workers)
             self.val_dataloader   = DataLoader(val_data, self.batch_size,
@@ -89,7 +83,7 @@ class Orchestrator():
 
         elif self.mode == "test":
 
-            test_data  = test_DIV2K_dataset(self.test_dataset_path)
+            test_data  = test_DIV2K_dataset(test_dataset_path)
             self.test_dataloader = DataLoader(test_data, 1,
                                     shuffle=True, num_workers=self.num_workers)
             self.model = UNet().to(self.device)
@@ -106,14 +100,14 @@ class Orchestrator():
         best_epoch_loss = float("inf")
         best_val_loss = float("inf")
         
-        for epoch in range(self.epoch):
+        for epoch in range(self.epochs):
 
             torch.cuda.empty_cache()
             self.model.train()
 
             b="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]"
             pbar = tqdm(total=len(self.train_dataloader), bar_format=b,
-                        desc=f"Epochs: {epoch+1}/{self.epoch}", ascii=" =")
+                        desc=f"Epochs: {epoch+1}/{self.epochs}", ascii=" =")
             
             epoch_loss = 0
             for i, (data, label) in enumerate(self.train_dataloader):
@@ -202,7 +196,7 @@ class Orchestrator():
 
         test_loss = 0
         for i, (file_name, data, label) in enumerate(self.test_dataloader):
-
+            torch.cuda.empty_cache()
             input, target = data.to(self.device), label.to(self.device)
             predict = self.model(input[:, 0:1, :, :])
             loss = self.criterion(predict, target[:, 0:1, :, :])
@@ -212,8 +206,8 @@ class Orchestrator():
 
             self.writer.add_scalar("Loss/test", loss.item(), i)
 
-            if i in test_idx:
-                self.complete_test(i, input, target, predict, file_name, csv_writer)
+            # if i in test_idx:
+            self.complete_test(i, input, target, predict, file_name, csv_writer)
 
             if i % self.update_rate == 0:
                 pbar.update(min(self.update_rate, len(self.test_dataloader) - i))
@@ -287,6 +281,23 @@ class Orchestrator():
             torch.save(self.model.state_dict(), f)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--DEBUG', type=bool, default=False)
+    parser.add_argument('--data_dir', type=str, default='dataset')
+    parser.add_argument('--test_data', default=("dataset_main/DIV2K_valid_HR", "dataset_main/DIV2K_valid_LR*"))
+    parser.add_argument('--result_dir', type=str, default='results')
+    parser.add_argument("-c", "--config", type=str, required=False, help="config file with parameters")
+    parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
+    parser.add_argument('--mode', type=str)
+    parser.add_argument('--num_workers', type=int, default=8)
+    parser.add_argument('--update_rate', type=int, default=10)
+    parser.add_argument('--save_rate', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=500)
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--weight_decay', type=float, default=0)
+    parser.add_argument('--do_validation', type=bool, default=True)
+    parser.add_argument('--model_path', type=str, default='results/2022-12-03-17-15-53/models/best_val_model.pt', help='test only')
+    args = parser.parse_args()
 
-    args = vars(parser.parse_args())
-    Orchestrator(args["config"])
+    Orchestrator(args)
