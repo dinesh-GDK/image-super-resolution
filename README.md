@@ -4,7 +4,10 @@ Use conda to create a python virtual environment and install dependencies
 
 ```bash
 conda create -n <environment_name> python=3.7
+
+#Use GPU
 conda install pytorch torchvision torchaudio pytorch-cuda=11.6 -c pytorch -c nvidia
+
 pip3 install -r requirements.txt
 ```
 
