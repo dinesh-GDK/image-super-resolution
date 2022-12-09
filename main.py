@@ -63,7 +63,7 @@ class Orchestrator():
         # log file
         self.logger = get_logger(os.path.join(self.result_path, "log"))
 
-        self.model = RRDBNet(1, 1, 64, 23, gc=32)
+        self.model = RRDBNet(1, 1, 64, 23, gc=32).to(self.device)
         self.criterion = torch.nn.MSELoss()
 
         if self.mode == "train":
@@ -197,7 +197,7 @@ class Orchestrator():
             torch.cuda.empty_cache()
 
             with torch.no_grad():
-                input, target = data, label
+                input, target = data.to(self.device), label.to(self.device)
 
                 input_channel = input[:, 0:1, :, :]
                 target_channel = target[:, 0:1, :, :]
@@ -213,15 +213,8 @@ class Orchestrator():
 
                 self.writer.add_scalar("Loss/test", loss.item(), i)
 
-                if i in test_idx:
-                    self.complete_test(i, input_exp, target, predict, file_name, csv_writer)
-
-            del input
-            del target
-            del input_channel
-            del target_channel
-            del predict
-            gc.collect()
+                # if i in test_idx:
+                self.complete_test(i, input_exp, target, predict, file_name, csv_writer)
 
             if i % self.update_rate == 0:
                 pbar.update(min(self.update_rate, len(self.test_dataloader) - i))
@@ -233,9 +226,6 @@ class Orchestrator():
         f.close()
 
     def complete_test(self, test_idx, input, target, predict, file_name, csv_writer):
-        print(input.shape)
-        print(target.shape)
-        print(predict.shape)
         input = input.squeeze(0)*255
         target = target.squeeze(0)*255
         predict = predict.squeeze(0)*255
