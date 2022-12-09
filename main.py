@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 import csv
 import random
+import gc
 
 from tqdm import tqdm
 import numpy as np
@@ -192,17 +193,33 @@ class Orchestrator():
         test_loss = 0
         for i, (file_name, data, label) in enumerate(self.test_dataloader):
             torch.cuda.empty_cache()
-            input, target = data.to(self.device), label.to(self.device)
-            predict = self.model(input[:, 0:1, :, :])
-            loss = self.criterion(predict, target[:, 0:1, :, :])
+            input, target = data, label
+            input_channel = input[:, 0:1, :, :]
+            target_channel = target[:, 0:1, :, :]
+            predict = self.model(input_channel)
+            loss = self.criterion(predict, target_channel)
             test_loss += loss.item()
 
-            predict = torch.cat((predict, input[:, 1:2, :, :], input[:, 2:3, :, :]), 1)
+            input = input.cpu().detach().numpy().squeeeze()
+            predict = predict.cpu().detach().numpy().squeeze(0)
+
+            height, width, _ = input.shape
+            input = cv2.resize(input, (width*2, height*2))
+
+            predict = np.concatenate((predict, input[1:2, :, :], input[2:3, :, :]), 0)
+            predict = predict.transpose(1, 2, 0)
 
             self.writer.add_scalar("Loss/test", loss.item(), i)
 
-            # if i in test_idx:
-            self.complete_test(i, input, target, predict, file_name, csv_writer)
+            if i in test_idx:
+                self.complete_test(i, input, target, predict, file_name, csv_writer)
+
+            del input
+            del target
+            del input_channel
+            del target_channel
+            del predict
+            gc.collect()
 
             if i % self.update_rate == 0:
                 pbar.update(min(self.update_rate, len(self.test_dataloader) - i))
