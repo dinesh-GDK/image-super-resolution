@@ -195,24 +195,26 @@ class Orchestrator():
         test_loss = 0
         for i, (file_name, data, label) in enumerate(self.test_dataloader):
             torch.cuda.empty_cache()
-            input, target = data, label
 
-            input_channel = input[:, 0:1, :, :]
-            target_channel = target[:, 0:1, :, :]
-            predict = self.model(input_channel)
+            with torch.no_grad():
+                input, target = data, label
 
-            loss = self.criterion(predict, target_channel)
-            test_loss += loss.item()
+                input_channel = input[:, 0:1, :, :]
+                target_channel = target[:, 0:1, :, :]
+                predict = self.model(input_channel)
 
-            _, _, height, width = input.shape
-            resizer = Resize([height * 2, width * 2])
-            input_exp = resizer(input)
-            predict = torch.cat((predict, input_exp[:, 1:2, :, :], input_exp[:, 2:3, :, :]), 1)
+                loss = self.criterion(predict, target_channel)
+                test_loss += loss.item()
 
-            self.writer.add_scalar("Loss/test", loss.item(), i)
+                _, _, height, width = input.shape
+                resizer = Resize([height * 2, width * 2])
+                input_exp = resizer(input)
+                predict = torch.cat((predict, input_exp[:, 1:2, :, :], input_exp[:, 2:3, :, :]), 1)
 
-            if i in test_idx:
-                self.complete_test(i, input_exp, target, predict, file_name, csv_writer)
+                self.writer.add_scalar("Loss/test", loss.item(), i)
+
+                if i in test_idx:
+                    self.complete_test(i, input_exp, target, predict, file_name, csv_writer)
 
             del input
             del target
