@@ -26,7 +26,7 @@ def create_patches(file_paths, output_dir, len, PATCH_SIZE=64):
         for i in range(0, lr.shape[0] - PATCH_SIZE + 1, STRIDE):
             for j in range(0, lr.shape[1] - PATCH_SIZE + 1, STRIDE):
                 np.savez_compressed(os.path.join(output_dir, f"{idx}_{i}_{j}"), 
-                    lr=lr[i:i + PATCH_SIZE, j:j + PATCH_SIZE],
+                    lr=cv2.resize(lr[i:i + PATCH_SIZE, j:j + PATCH_SIZE], (PATCH_SIZE//2, PATCH_SIZE//2)),
                     hr=hr[i:i + PATCH_SIZE, j:j + PATCH_SIZE])
 
 if __name__ == "__main__":

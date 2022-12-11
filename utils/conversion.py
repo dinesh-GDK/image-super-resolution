@@ -1,20 +1,12 @@
 import numpy as np
 import torch
 
-def convert_rgb_to_y(img):
-
+def RBB2Y(img):
     y = 16.  + (65.481 * img[:, :, 0]  + 128.553 * img[:, :, 1] +  24.966 * img[:, :, 2]) / 255.
-    
-    # if type(img) == np.ndarray:
-    #     y = np.expand_dims(y, axis=0)
-    # if type(img) == torch.Tensor:
-    #     y = y.unsqueeze(0)
-    # else:
-    #     raise Exception('Unknown Type', type(img))
     return y
 
+def RGB2YUV(img):
 
-def convert_rgb_to_ycbcr(img):
     if len(img.shape) == 4:
         img = img.squeeze(0)
 
@@ -27,19 +19,11 @@ def convert_rgb_to_ycbcr(img):
     elif type(img) == torch.Tensor:
         return torch.stack((y, cb, cr), 0)
     else:
-        raise Exception('Unknown Type', type(img))
+        raise Exception("Conversion type not supported", type(img))
 
 
-def convert_ycbcr_to_rgb(img):
-    if type(img) == np.ndarray:
-        r = 298.082 * img[:, :, 0] / 256. + 408.583 * img[:, :, 2] / 256. - 222.921
-        g = 298.082 * img[:, :, 0] / 256. - 100.291 * img[:, :, 1] / 256. - 208.120 * img[:, :, 2] / 256. + 135.576
-        b = 298.082 * img[:, :, 0] / 256. + 516.412 * img[:, :, 1] / 256. - 276.836
-        return np.array([r, g, b]).transpose([1, 2, 0])
-    elif type(img) == torch.Tensor:
-        r = 298.082 * img[0, :, :] / 256. + 408.583 * img[2, :, :] / 256. - 222.921
-        g = 298.082 * img[0, :, :] / 256. - 100.291 * img[1, :, :] / 256. - 208.120 * img[2, :, :] / 256. + 135.576
-        b = 298.082 * img[0, :, :] / 256. + 516.412 * img[1, :, :] / 256. - 276.836
-        return torch.stack([r, g, b], 0).permute(1, 2, 0)
-    else:
-        raise Exception('Unknown Type', type(img))
+def YUV2RGB(img):
+    r = 298.082 * img[0, :, :] / 256. + 408.583 * img[2, :, :] / 256. - 222.921
+    g = 298.082 * img[0, :, :] / 256. - 100.291 * img[1, :, :] / 256. - 208.120 * img[2, :, :] / 256. + 135.576
+    b = 298.082 * img[0, :, :] / 256. + 516.412 * img[1, :, :] / 256. - 276.836
+    return torch.stack([r, g, b], 0).permute(1, 2, 0)
