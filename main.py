@@ -64,7 +64,7 @@ class Orchestrator():
         self.logger = get_logger(os.path.join(self.result_path, "log"))
 
         if args.model == "unet":
-            self.model = UNet()
+            self.model = UNet().to(self.device)
             upscale = True
         elif args.model == "rrdbnet":
             self.model =  RRDBNet(1, 1, 64, 23, gc=32).to(self.device)
@@ -80,8 +80,7 @@ class Orchestrator():
             val_data   = DIV2K_dataset(valid_dataset_path, upscale)
             self.train_dataloader = DataLoader(train_data, self.batch_size,
                                         shuffle=True, num_workers=self.num_workers)
-            self.val_dataloader   = DataLoader(val_data, self.batch_size,
-                                        shuffle=True, num_workers=self.num_workers)
+            self.val_dataloader   = DataLoader(val_data, self.batch_size, num_workers=self.num_workers)
 
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
             self.model = torch.nn.DataParallel(self.model)
@@ -91,7 +90,7 @@ class Orchestrator():
 
             test_data  = test_DIV2K_dataset(test_dataset_path, upscale)
             self.test_dataloader = DataLoader(test_data, 1, num_workers=self.num_workers)
-            self.model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
+            self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
             self.test()
 
         else:
@@ -175,7 +174,7 @@ class Orchestrator():
                     pbar.set_postfix(Loss=f"{loss.item():.8f}")
         
         val_loss /= len(self.val_dataloader)
-        self.writer.add_scalar("Loss/val", val_loss, epoch)
+        self.writer.add_scalar("Val Loss/epochs", val_loss, epoch)
         pbar.set_postfix(Loss=f"{val_loss:.8f}")
         pbar.close()
 
@@ -283,13 +282,13 @@ class Orchestrator():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, choices=['train', 'test'], help='train/test', required=True)
-    parser.add_argument('--model', type=str, choices=['unet', 'rrdbnet'], required=True, help='unet/rrdbnet')
+    parser.add_argument('--mode', type=str, choices=['train', 'test'], help='train or test', required=True)
+    parser.add_argument('--model', type=str, choices=['unet', 'rrdbnet'], required=True, help='unet or rrdbnet')
     parser.add_argument('--data_dir', type=str, default='dataset', help='path to the processed patch dataset')
     parser.add_argument('--test_data', default=('dataset_main/DIV2K_valid_HR', 'dataset_main/DIV2K_valid_LR*'), help='path to test directory')
     parser.add_argument('--result_dir', type=str, default='results', help='results directory')
     parser.add_argument('-c', '--config', type=str, help='config file with parameters')
-    parser.add_argument('--num_workers', type=int, default=6)
+    parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--update_rate', type=int, default=10)
     parser.add_argument('--save_rate', type=int, default=10)
     parser.add_argument('--epochs', type=int, default=500)
