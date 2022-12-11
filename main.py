@@ -21,8 +21,8 @@ from torchvision.transforms import Resize
 
 from dataset import DIV2K_dataset, test_DIV2K_dataset
 from utils.logger import get_logger
-from utils.conversion import convert_ycbcr_to_rgb
-from models import UNet, SRCNN, RRDBNet
+from utils.conversion import YUV2RGB
+from models import UNet, RRDBNet
 
 class Orchestrator():
     
@@ -63,13 +63,21 @@ class Orchestrator():
         # log file
         self.logger = get_logger(os.path.join(self.result_path, "log"))
 
-        self.model = RRDBNet(1, 1, 64, 23, gc=32).to(self.device)
+        if args.model == "unet":
+            self.model = UNet()
+            upscale = True
+        elif args.model == "rrdbnet":
+            self.model =  RRDBNet(1, 1, 64, 23, gc=32).to(self.device)
+            upscale = False
+        else:
+            raise Exception("Model not available")
+        
         self.criterion = torch.nn.MSELoss()
 
         if self.mode == "train":
 
-            train_data = DIV2K_dataset(train_dataset_path)
-            val_data   = DIV2K_dataset(valid_dataset_path)
+            train_data = DIV2K_dataset(train_dataset_path, upscale)
+            val_data   = DIV2K_dataset(valid_dataset_path, upscale)
             self.train_dataloader = DataLoader(train_data, self.batch_size,
                                         shuffle=True, num_workers=self.num_workers)
             self.val_dataloader   = DataLoader(val_data, self.batch_size,
@@ -81,7 +89,7 @@ class Orchestrator():
 
         elif self.mode == "test":
 
-            test_data  = test_DIV2K_dataset(test_dataset_path)
+            test_data  = test_DIV2K_dataset(test_dataset_path, upscale)
             self.test_dataloader = DataLoader(test_data, 1, num_workers=self.num_workers)
             self.model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
             self.test()
@@ -153,17 +161,18 @@ class Orchestrator():
                     desc=f"Validation", ascii=" -")
         
         val_loss = 0
-        for i, (data, label) in enumerate(self.val_dataloader):
+        with torch.no_grad():
+            for i, (data, label) in enumerate(self.val_dataloader):
 
-            input, target = data.to(self.device), label.to(self.device)
-            predict = self.model(input)
-            loss = self.criterion(predict, target)
+                input, target = data.to(self.device), label.to(self.device)
+                predict = self.model(input)
+                loss = self.criterion(predict, target)
 
-            val_loss += loss.item()
-            
-            if i % self.update_rate == 0:
-                pbar.update(min(self.update_rate, len(self.val_dataloader) - i))
-                pbar.set_postfix(Loss=f"{loss.item():.8f}")
+                val_loss += loss.item()
+                
+                if i % self.update_rate == 0:
+                    pbar.update(min(self.update_rate, len(self.val_dataloader) - i))
+                    pbar.set_postfix(Loss=f"{loss.item():.8f}")
         
         val_loss /= len(self.val_dataloader)
         self.writer.add_scalar("Loss/val", val_loss, epoch)
@@ -171,8 +180,6 @@ class Orchestrator():
         pbar.close()
 
         return val_loss
-
-   
 
     def test(self):
 
@@ -193,10 +200,10 @@ class Orchestrator():
             "Original PSNR", "Predict PSNR", "Original SSIM", "Predict SSIM"])
 
         test_loss = 0
-        for i, (file_name, data, label) in enumerate(self.test_dataloader):
-            torch.cuda.empty_cache()
+        with torch.no_grad():
+            for i, (file_name, data, label) in enumerate(self.test_dataloader):
+                torch.cuda.empty_cache()
 
-            with torch.no_grad():
                 input, target = data.to(self.device), label.to(self.device)
 
                 input_channel = input[:, 0:1, :, :]
@@ -216,9 +223,9 @@ class Orchestrator():
                 # if i in test_idx:
                 self.complete_test(i, input_exp, target, predict, file_name, csv_writer)
 
-            if i % self.update_rate == 0:
-                pbar.update(min(self.update_rate, len(self.test_dataloader) - i))
-                pbar.set_postfix(Loss=f"{loss.item():.8f}")
+                if i % self.update_rate == 0:
+                    pbar.update(min(self.update_rate, len(self.test_dataloader) - i))
+                    pbar.set_postfix(Loss=f"{loss.item():.8f}")
 
         test_loss /= len(self.test_dataloader)
         pbar.set_postfix(Loss=f"{test_loss:.8f}")
@@ -230,9 +237,9 @@ class Orchestrator():
         target = target.squeeze(0)*255
         predict = predict.squeeze(0)*255
 
-        input = convert_ycbcr_to_rgb(input)
-        predict = convert_ycbcr_to_rgb(predict)
-        target = convert_ycbcr_to_rgb(target)
+        input = YUV2RGB(input)
+        predict = YUV2RGB(predict)
+        target = YUV2RGB(target)
         
         input = input.clip(0, 255).cpu().detach().numpy().astype(np.uint8)
         target = target.clip(0, 255).cpu().detach().numpy().astype(np.uint8)
@@ -256,21 +263,6 @@ class Orchestrator():
 
         cv2.imwrite(os.path.join(images_dir, file_name[0]), cv2.cvtColor(predict, cv2.COLOR_RGB2BGR))
 
-        # fig, ax = plt.subplots(1, 3, figsize=(10, 2))
-
-        # for i, (title, image) in enumerate(zip(["High Resolution", "Low Resolution", "Model Prediction"], [target, input, predict])):
-        #     ax[i].imshow(image)
-        #     ax[i].set_axis_off()
-        #     ax[i].set_title(title)
-
-        # print(f"RMSE:{o_rmse:.4f}\nPSNR:{o_psnr:.4f}\nSSIM:{o_ssim}:.4f")
-        # ax[1].set_xlabel(f"RMSE:{o_rmse:.4f}\nPSNR:{o_psnr:.4f}\nSSIM:{o_ssim:.4f}")
-        # ax[2].set_xlabel(f"RMSE:{p_rmse:.4f}\nPSNR:{p_psnr:.4f}\nSSIM:{p_ssim:.4f}")
-
-        # # fig.suptitle(f"Random Image: {test_idx}")
-        # fig.savefig(os.path.join(images_path, f"{test_idx}.png"))#, bbox_inches="tight")
-        # plt.close()
-
     def get_config(self, config_path):
 
         if config_path != "":
@@ -291,13 +283,12 @@ class Orchestrator():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--DEBUG', type=bool, default=False)
-    parser.add_argument('--data_dir', type=str, default='dataset')
-    parser.add_argument('--test_data', default=("dataset_main/DIV2K_valid_HR", "dataset_main/DIV2K_valid_LR*"))
-    parser.add_argument('--result_dir', type=str, default='results')
-    parser.add_argument("-c", "--config", type=str, required=False, help="config file with parameters")
-    parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
-    parser.add_argument('--mode', type=str)
+    parser.add_argument('--mode', type=str, choices=['train', 'test'], help='train/test', required=True)
+    parser.add_argument('--model', type=str, choices=['unet', 'rrdbnet'], required=True, help='unet/rrdbnet')
+    parser.add_argument('--data_dir', type=str, default='dataset', help='path to the processed patch dataset')
+    parser.add_argument('--test_data', default=('dataset_main/DIV2K_valid_HR', 'dataset_main/DIV2K_valid_LR*'), help='path to test directory')
+    parser.add_argument('--result_dir', type=str, default='results', help='results directory')
+    parser.add_argument('-c', '--config', type=str, help='config file with parameters')
     parser.add_argument('--num_workers', type=int, default=6)
     parser.add_argument('--update_rate', type=int, default=10)
     parser.add_argument('--save_rate', type=int, default=10)
@@ -307,6 +298,7 @@ if __name__ == "__main__":
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--do_validation', type=bool, default=True)
     parser.add_argument('--model_path', type=str, default='results/2022-12-06-20-39-21/models/best_val_model.pt', help='test only')
+    parser.add_argument('--DEBUG', action='store_true')
     args = parser.parse_args()
 
     Orchestrator(args)
