@@ -1,5 +1,18 @@
 # Image Super Resolution
+
+### TL;DR
 Repo to train and test Image Super Resolution models
+
+<p align="center">
+    <img src="assests/result.png">
+</p>
+<p align="center">
+    Figure 1. (a) Low Resolution Image (b) High Resolution Image (c) Super Scaled by U-Net (d) Super Scaled by RRDB-Net
+</p>
+
+## Brief Overview
+
+We used [DVI2K](https://data.vision.ee.ethz.ch/cvl/DIV2K/) as our dataset. Our aim is to convert images in 2K resolution to 4K resolution. Patch training is used to reduce the computation resources required for training. Inference is also done in patches and 4K image is reconstructed combining the patches. UNet and RRDBNet are used for training and inference. Bigger models can be used given enough hardware resources. For more details please look into detailed report [here](assests/Project_report.pdf).
 ## Setup
 
 Use conda to create a python virtual environment and install dependencies
@@ -8,7 +21,7 @@ Use conda to create a python virtual environment and install dependencies
 conda create -n <environment_name> python=3.7
 
 # use GPU
-conda install pytorch torchvision torchaudio pytorch-cuda=11.6 -c pytorch -c nvidia
+conda install pytorch torchaudio pytorch-cuda=11.6 -c pytorch -c nvidia
 
 pip3 install -r requirements.txt
 ```
@@ -31,13 +44,13 @@ python3 main.py --mode=train --model=rrdbnet
 ## Test
 To test the trained U-Net model
 ```bash
-python3 main.py --mode=train --model=unet --model_path=results/<YYYY-MM-DD-HH-MM-SS>/models/<model_name>.pt
+python3 main.py --mode=test --model=unet --model_path=results/<YYYY-MM-DD-HH-MM-SS>/models/<model_name>.pt
 ```
 To test the trained RRDB-Net model
 ```bash
-python3 main.py --mode=train --model=rrdbnet --model_path=results/<YYYY-MM-DD-HH-MM-SS>/models/<model_name>.pt
+python3 main.py --mode=test --model=rrdbnet --model_path=results/<YYYY-MM-DD-HH-MM-SS>/models/<model_name>.pt
 ```
-## Overview
+## Repo Structure
 ```
 /image-super-resolution
     |
